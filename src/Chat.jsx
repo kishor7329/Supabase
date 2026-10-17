@@ -7,6 +7,15 @@ export default function Chat() {
   const [busy, setBusy] = useState(false);
   const endRef = useRef(null);
 
+  // load saved history when the page opens
+  useEffect(() => {
+    supabase
+      .from("chat_messages")
+      .select("role, content")
+      .order("id")
+      .then(({ data }) => setMessages(data ?? []));
+  }, []);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -14,14 +23,21 @@ export default function Chat() {
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
-    const next = [...messages, { role: "user", content: text }];
+
+    const userMsg = { role: "user", content: text };
+    const next = [...messages, userMsg];
     setMessages(next);
     setInput("");
     setBusy(true);
 
+    // save the user's message
+    await supabase.from("chat_messages").insert(userMsg);
+
+    // ask Gemini through the edge function (full history gives it context)
     const { data, error } = await supabase.functions.invoke("chat", {
       body: { messages: next },
     });
+
     let reply;
     if (error) {
       let detail = error.message;
@@ -33,9 +49,19 @@ export default function Chat() {
       reply = "Error: " + data.error;
     } else {
       reply = data.reply;
+      // save only real answers, not errors
+      await supabase
+        .from("chat_messages")
+        .insert({ role: "assistant", content: reply });
     }
+
     setMessages([...next, { role: "assistant", content: reply }]);
     setBusy(false);
+  };
+
+  const clearChat = async () => {
+    await supabase.from("chat_messages").delete().neq("id", 0);
+    setMessages([]);
   };
 
   return (
@@ -80,6 +106,9 @@ export default function Chat() {
         />
         <button onClick={send} disabled={busy}>
           Send
+        </button>
+        <button onClick={clearChat} disabled={busy}>
+          Clear
         </button>
       </div>
     </div>
